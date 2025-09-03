@@ -1,6 +1,6 @@
 Arch HUD
 
-This addon provides a lightweight Battlefield-inspired HUD including:
+This addon provides a lightweight LUA only HUD including:
 - Health bar
 - Armor and player name/team display
 - Ammo (clip / reserve)
