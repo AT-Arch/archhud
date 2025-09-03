@@ -13,6 +13,24 @@ archhud_config.IdentificationLabel = archhud_config.IdentificationLabel or "Name
 archhud_config.OccupationLabel = archhud_config.OccupationLabel or "Job:"
 archhud_config.CreditsLabel = archhud_config.CreditsLabel or "Money:"
 
+-- Label colors: configurable per-label. Defaults match previous blur color.
+archhud_config.IdentificationLabelColor = archhud_config.IdentificationLabelColor or Color(180,230,255,255)
+archhud_config.OccupationLabelColor = archhud_config.OccupationLabelColor or Color(180,230,255,255)
+archhud_config.CreditsLabelColor = archhud_config.CreditsLabelColor or Color(180,230,255,255)
+
+-- Crosshair SWEP blacklist: list SWEP class names for which the HUD crosshair should be suppressed.
+-- Example: archhud_config.CrosshairSWEPBlacklist = { "weapon_physgun", "gmod_tool" }
+archhud_config.CrosshairSWEPBlacklist = archhud_config.CrosshairSWEPBlacklist or { "weapon_crowbar" }
+
+-- Damage indicator: when provided an attacker position, show arrow on minimap
+archhud_config.DamageIndicatorDuration = archhud_config.DamageIndicatorDuration or 1.2
+archhud_config.DamageIndicatorColor = archhud_config.DamageIndicatorColor or Color(255,80,80,220)
+-- Radar blip fade duration (seconds) for recently-seen entities (default: 1s)
+archhud_config.RadarFadeDuration = archhud_config.RadarFadeDuration or 1
+
+-- Net receiver: server may send attacker world position to clients when they are hurt.
+-- Message name: "archhud_damage_dir" (net.WriteVector(attackerPos)).
+
 -- Data providers: functions returning the displayed values. These can be replaced by server/provided code
 -- Each function receives the local player as the first argument and should return a sensible type
 if not archhud_config.GetOccupation then
@@ -36,7 +54,7 @@ end
 if not archhud_config.GetStamina then
     -- default: stamina is always full; replace with your stamina system accessor
     archhud_config.GetStamina = function(ply)
-        return 100
+        return false
     end
 end
 
@@ -98,7 +116,18 @@ local hud = {
     armorSpike = 0,
     displayStamina = 100,
     crossAnim = 0,
+    radarBlips = {},
 }
+
+-- Net receiver: server may send attacker world position to clients when they are hurt.
+-- Message name: "archhud_damage_dir" (net.WriteVector(attackerPos)).
+if CLIENT then
+    net.Receive("archhud_damage_dir", function()
+        local pos = net.ReadVector()
+        hud.damageIndicators = hud.damageIndicators or {}
+        table.insert(hud.damageIndicators, { pos = pos, time = CurTime() })
+    end)
+end
 
 hook.Add("HUDPaint", "archhud_draw", function()
     if not enabled then return end
@@ -190,7 +219,10 @@ hook.Add("HUDPaint", "archhud_draw", function()
     local innerW = mW - S(12)
     local innerH = mH - S(12)
     local fillH = math.max(4, math.floor(innerH * hpPct))
-    draw.RoundedBox(4, innerX, innerY + (innerH - fillH), innerW, fillH, HSVToColor(math.Clamp(hpPct * 120, 0, 120), 1, 0.9))
+    -- darker health fill: reduce value and add slight alpha for contrast
+    local fillCol = HSVToColor(math.Clamp(hpPct * 120, 0, 120), 1, 0.55)
+    fillCol.a = 220
+    draw.RoundedBox(4, innerX, innerY + (innerH - fillH), innerW, fillH, fillCol)
 
     -- heartbeat waveform: spike on damage
     hud.heartTime = hud.heartTime + (FrameTime() * (1 + hud.heartSpike * 3))
@@ -278,12 +310,12 @@ hook.Add("HUDPaint", "archhud_draw", function()
     -- Player name and team to the right of the health & armor monitors
     local textX = aX + aW + S(8)
     local textY = mY + S(6)
-    -- draw bold 'Identification:' label in the health-wave blur color, then the nickname
+    -- draw bold 'Identification:' label (color configurable)
     local label = (archhud_config and archhud_config.IdentificationLabel) or "Identification:"
-    local blurCol = Color(180,230,255,255)
+    local idCol = (archhud_config and archhud_config.IdentificationLabelColor) or Color(180,230,255,255)
     surface.SetFont("archhud_large")
     local lw = surface.GetTextSize(label .. " ")
-    draw.SimpleText(label, "archhud_large", textX, textY, blurCol, TEXT_ALIGN_LEFT, TEXT_ALIGN_TOP)
+    draw.SimpleText(label, "archhud_large", textX, textY, idCol, TEXT_ALIGN_LEFT, TEXT_ALIGN_TOP)
     local idText = (archhud_config and archhud_config.GetIdentification and archhud_config.GetIdentification(ply)) or ply:Nick()
     draw.SimpleText(idText, "archhud_large", textX + lw + S(4), textY, Color(245,245,245), TEXT_ALIGN_LEFT, TEXT_ALIGN_TOP)
     local teamColor = Color(200,200,200)
@@ -295,28 +327,23 @@ hook.Add("HUDPaint", "archhud_draw", function()
         if okc and type(tcol) == "table" then teamColor = tcol end
     end
     local tlabel = (archhud_config and archhud_config.OccupationLabel) or "Occupation:"
+    local occCol = (archhud_config and archhud_config.OccupationLabelColor) or idCol
     surface.SetFont("archhud_small")
     local tlw = surface.GetTextSize(tlabel .. " ")
-    draw.SimpleText(tlabel, "archhud_small", textX, textY + S(28), blurCol, TEXT_ALIGN_LEFT, TEXT_ALIGN_TOP)
+    draw.SimpleText(tlabel, "archhud_small", textX, textY + S(28), occCol, TEXT_ALIGN_LEFT, TEXT_ALIGN_TOP)
     local occText = (archhud_config and archhud_config.GetOccupation and tostring(archhud_config.GetOccupation(ply))) or teamName
     draw.SimpleText(occText, "archhud_small", textX + tlw + S(4), textY + S(28), teamColor, TEXT_ALIGN_LEFT, TEXT_ALIGN_TOP)
     -- Credits label/value below Occupation
     local clabel = (archhud_config and archhud_config.CreditsLabel) or "Credits:"
+    local credCol = (archhud_config and archhud_config.CreditsLabelColor) or idCol
     local cval = ((archhud_config and archhud_config.GetCredits) and archhud_config.GetCredits(ply)) or 0
     surface.SetFont("archhud_small")
     local clw = surface.GetTextSize(clabel .. " ")
-    draw.SimpleText(clabel, "archhud_small", textX, textY + S(28) + S(20), blurCol, TEXT_ALIGN_LEFT, TEXT_ALIGN_TOP)
+    draw.SimpleText(clabel, "archhud_small", textX, textY + S(28) + S(20), credCol, TEXT_ALIGN_LEFT, TEXT_ALIGN_TOP)
     draw.SimpleText(tostring(cval), "archhud_small", textX + clw + S(4), textY + S(28) + S(20), Color(245,245,245), TEXT_ALIGN_LEFT, TEXT_ALIGN_TOP)
 
     -- (ammo panel moved below so it's rendered above minimap)
-    -- Stamina bar (bottom of HUD) - orange, full by default; configurable later
-    -- Stamina: track previous value so we can color on increase/decrease
-    local prevSt = hud.displayStamina or 100
-    local targetSt = (archhud_config and archhud_config.GetStamina and archhud_config.GetStamina(ply)) or 100 -- use config-provided stamina getter
-    hud.displayStamina = Lerp(math.min(10 * ft, 1), prevSt, targetSt)
-    local deltaSt = hud.displayStamina - (hud.lastStamina or prevSt)
-    hud.lastStamina = hud.displayStamina
-
+    -- Stamina bar: optional. If archhud_config.GetStamina returns nil or false, the bar is hidden.
     local padding = S(8)
     local stH = S(10)
     -- position stamina to the right of the monitors/text to avoid clipping
@@ -325,16 +352,38 @@ hook.Add("HUDPaint", "archhud_draw", function()
     local stW = math.max(S(100), (x + boxW - padding) - stX - S(12))
     -- move it slightly up (more top spacing) so it fits better
     local stY = y + boxH - stH - S(12) -- inside the main box near bottom with extra top spacing
-    draw.RoundedBox(6, stX, stY, stW, stH, Color(30,20,10,200))
-    local sPct = math.Clamp((hud.displayStamina or 100) / 100, 0, 1)
-    -- color based on change: green when increasing, red when decreasing, orange otherwise
-    local fillCol = Color(255,165,0)
-    if deltaSt > 0.01 then
-        fillCol = Color(120,255,120)
-    elseif deltaSt < -0.01 then
-        fillCol = Color(255,100,100)
+
+    local hasStamina = false
+    local targetSt = nil
+    if archhud_config and archhud_config.GetStamina then
+        local ok, val = pcall(function() return archhud_config.GetStamina(ply) end)
+        if ok and val ~= nil and val ~= false then
+            targetSt = tonumber(val) or 0
+            hasStamina = true
+        end
     end
-    draw.RoundedBox(6, stX, stY, math.max(4, math.floor(stW * sPct)), stH, fillCol)
+
+    if hasStamina then
+        local prevSt = hud.displayStamina or targetSt or 100
+        hud.displayStamina = Lerp(math.min(10 * ft, 1), prevSt, targetSt)
+        local deltaSt = hud.displayStamina - (hud.lastStamina or prevSt)
+        hud.lastStamina = hud.displayStamina
+
+        draw.RoundedBox(6, stX, stY, stW, stH, Color(30,20,10,200))
+        local sPct = math.Clamp((hud.displayStamina or 100) / 100, 0, 1)
+        -- color based on change: green when increasing, red when decreasing, yellow otherwise
+        local stFillCol = Color(255,200,60)
+        if deltaSt > 0.01 then
+            stFillCol = Color(120,255,120)
+        elseif deltaSt < -0.01 then
+            stFillCol = Color(255,100,100)
+        end
+        draw.RoundedBox(6, stX, stY, math.max(4, math.floor(stW * sPct)), stH, stFillCol)
+    else
+        -- hide stamina: reset smoothing to default
+        hud.displayStamina = hud.displayStamina or 100
+        hud.lastStamina = hud.lastStamina or hud.displayStamina
+    end
 
     -- Damage flash overlay
     if hud.flash > 0 then
@@ -372,6 +421,52 @@ hook.Add("HUDPaint", "archhud_draw", function()
     end
     surface.DrawPoly(poly)
 
+    -- Damage direction indicators: support multiple arrows that fade over time
+    if hud.damageIndicators and #hud.damageIndicators > 0 then
+        local dur = archhud_config.DamageIndicatorDuration or 5
+        local now = CurTime()
+        local keep = {}
+        for _, ind in ipairs(hud.damageIndicators) do
+            local age = now - (ind.time or 0)
+            if age <= dur then
+                -- compute fade (1 -> full, 0 -> expired)
+                local frac = math.Clamp(1 - (age / dur), 0, 1)
+                -- attacker pos
+                local attackerPos = ind.pos
+                local localPos = WorldToLocal(attackerPos, Angle(0,0,0), ply:GetPos(), Angle(0, ply:EyeAngles().y, 0))
+                local lx, ly = localPos.x, localPos.y
+                if (lx * lx + ly * ly) > 0.000001 then
+                    local finalAng = math.atan2(lx, ly)
+                    finalAng = finalAng + math.pi
+                    local arrowR = innerR - S(6)
+                    local ax = cx + math.cos(finalAng) * arrowR
+                    local ay = cy + math.sin(finalAng) * arrowR
+                    local size = S(10)
+                    local perpAng1 = finalAng + math.rad(140)
+                    local perpAng2 = finalAng - math.rad(140)
+                    local p1x = ax + math.cos(finalAng) * size
+                    local p1y = ay + math.sin(finalAng) * size
+                    local p2x = ax + math.cos(perpAng1) * (size * 0.6)
+                    local p2y = ay + math.sin(perpAng1) * (size * 0.6)
+                    local p3x = ax + math.cos(perpAng2) * (size * 0.6)
+                    local p3y = ay + math.sin(perpAng2) * (size * 0.6)
+                    local baseCol = (archhud_config.DamageIndicatorColor or Color(255,80,80,220))
+                    local a = math.floor((baseCol.a or 220) * frac)
+                    surface.SetDrawColor(baseCol.r, baseCol.g, baseCol.b, a)
+                    draw.NoTexture()
+                    local polyA = {
+                        { x = p1x, y = p1y },
+                        { x = p2x, y = p2y },
+                        { x = p3x, y = p3y },
+                    }
+                    surface.DrawPoly(polyA)
+                    keep[#keep + 1] = ind
+                end
+            end
+        end
+        hud.damageIndicators = keep
+    end
+
     -- Radar circular grid: concentric rings and radial lines
     surface.SetDrawColor(120,120,120,35)
     for ring = 1, 2 do
@@ -395,6 +490,45 @@ hook.Add("HUDPaint", "archhud_draw", function()
         surface.DrawLine(x1, y1, x2, y2)
     end
     surface.SetDrawColor(255,255,255,255)
+    -- Prepare radar coordinate helpers used for blips (define before drawing)
+    local centerX = cx
+    local centerY = cy
+    local maxRange = 2000
+    local scale = (radarSize / 2) / maxRange
+
+    -- Draw radar blips with fade: keep blips for archhud_config.RadarFadeDuration seconds after last seen
+    do
+        local now = CurTime()
+        local fadeDur = archhud_config.RadarFadeDuration or 5
+        local keep = {}
+        for id, info in pairs(hud.radarBlips or {}) do
+            local age = now - (info.t or 0)
+            if age <= fadeDur then
+                local localPos = WorldToLocal(info.pos, Angle(0,0,0), ply:GetPos(), Angle(0, ply:EyeAngles().y, 0))
+                local dotX = centerX - (localPos.y * scale)
+                local dotY = centerY - (localPos.x * scale)
+                local dx, dy = dotX - centerX, dotY - centerY
+                local dist = math.sqrt(dx * dx + dy * dy)
+                local maxR = innerR
+                local relX, relY
+                if dist > maxR then
+                    local ratio = maxR / dist
+                    relX = centerX + dx * ratio
+                    relY = centerY + dy * ratio
+                else
+                    relX = dotX
+                    relY = dotY
+                end
+                local frac = math.Clamp(1 - (age / fadeDur), 0, 1)
+                local a = math.floor(255 * frac)
+                local col = Color(120,200,100, a)
+                if info.npc then col = Color(220,80,80, a) end
+                draw.RoundedBox(4, relX - S(3), relY - S(3), S(6), S(6), col)
+                keep[id] = info
+            end
+        end
+        hud.radarBlips = keep
+    end
 
     -- Ammo / Weapon panel below the minimap
     local ammoW, ammoH = S(140), S(56)
@@ -428,8 +562,6 @@ hook.Add("HUDPaint", "archhud_draw", function()
         surface.SetDrawColor(255,255,255,255)
     end
 
-    local centerX = cx
-    local centerY = cy
     local rawYaw = math.NormalizeAngle(ply:EyeAngles().y or 0)
     if rawYaw < 0 then rawYaw = rawYaw + 360 end
     local yaw = (360 - rawYaw) % 360
@@ -442,56 +574,21 @@ hook.Add("HUDPaint", "archhud_draw", function()
     local cdir = compassDir(yaw)
     draw.SimpleText(string.format("%s %d°", cdir, deg), "archhud_small", centerX, ry + S(6), Color(200,200,200), TEXT_ALIGN_CENTER, TEXT_ALIGN_TOP)
 
-    local maxRange = 2000
-    local scale = (radarSize / 2) / maxRange
+    -- maxRange and scale are defined above for radar blip math
 
-    -- Teammates
+    -- Teammates: register blips (persist and fade when out of detection)
     for _, pl in ipairs(player.GetAll()) do
         if IsValid(pl) and pl ~= ply and pl:Alive() and pl:Team() == ply:Team() then
-            local wpos = pl:GetPos()
-            local localPos = WorldToLocal(wpos, Angle(0,0,0), ply:GetPos(), Angle(0, ply:EyeAngles().y, 0))
-            local dotX = centerX - (localPos.y * scale)
-            local dotY = centerY - (localPos.x * scale)
-            -- clamp to circle boundary
-            local dx, dy = dotX - centerX, dotY - centerY
-            local dist = math.sqrt(dx * dx + dy * dy)
-            local maxR = innerR
-            local relX, relY
-            if dist > maxR then
-                local ratio = maxR / dist
-                relX = centerX + dx * ratio
-                relY = centerY + dy * ratio
-            else
-                relX = dotX
-                relY = dotY
-            end
-            local col = (team and team.GetColor) and team.GetColor(pl:Team()) or Color(100,200,100)
-            draw.RoundedBox(4, relX - S(3), relY - S(3), S(6), S(6), col)
+            hud.radarBlips[pl:EntIndex()] = { pos = pl:GetPos(), t = CurTime(), team = pl:Team() }
         end
     end
 
-    -- NPCs
+    -- NPCs: register blips
     for _, ent in ipairs(ents.GetAll()) do
         if IsValid(ent) and ent:IsNPC() and ent:Health() > 0 then
             local dist = ent:GetPos():DistToSqr(ply:GetPos())
             if dist <= (maxRange * maxRange) then
-                local wpos = ent:GetPos()
-                local localPos = WorldToLocal(wpos, Angle(0,0,0), ply:GetPos(), Angle(0, ply:EyeAngles().y, 0))
-                local dotX = centerX - (localPos.y * scale)
-                local dotY = centerY - (localPos.x * scale)
-                local dx, dy = dotX - centerX, dotY - centerY
-                local dist2 = math.sqrt(dx * dx + dy * dy)
-                local maxR = innerR
-                local relX, relY
-                if dist2 > maxR then
-                    local ratio = maxR / dist2
-                    relX = centerX + dx * ratio
-                    relY = centerY + dy * ratio
-                else
-                    relX = dotX
-                    relY = dotY
-                end
-                draw.RoundedBox(4, relX - S(3), relY - S(3), S(6), S(6), Color(220,80,80))
+                hud.radarBlips[ent:EntIndex()] = { pos = ent:GetPos(), t = CurTime(), npc = true }
             end
         end
     end
@@ -503,11 +600,23 @@ hook.Add("HUDPaint", "archhud_draw", function()
         local ent = tr and tr.Entity
         local aimed = IsValid(ent) and (ent:IsPlayer() or ent:IsNPC())
 
-        -- animate (0 = square, 1 = crosshair)
+        -- Check active weapon against blacklist
+    local activeWep = ply:GetActiveWeapon()
+    local wepClass = (IsValid(activeWep) and activeWep:GetClass()) or ""
+        local blacklisted = false
+        if archhud_config and archhud_config.CrosshairSWEPBlacklist then
+            for _, cls in ipairs(archhud_config.CrosshairSWEPBlacklist) do
+                if cls == wepClass then blacklisted = true break end
+            end
+        end
+
+        -- animate (0 = square, 1 = crosshair). If blacklisted, always target 0.
         hud.crossAnim = hud.crossAnim or 0
-        local target = aimed and 1 or 0
-        -- speed tuned for snappy but smooth transition
+        local target = (not blacklisted and aimed) and 1 or 0
         hud.crossAnim = Lerp(math.min(10 * ft, 1), hud.crossAnim, target)
+
+        -- if fully hidden and blacklisted, skip drawing early
+        if blacklisted and hud.crossAnim <= 0.005 then return end
 
         -- sizes (bigger as requested)
         local squareHalfBase = S(18) -- base half-size for square

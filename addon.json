@@ -1,9 +1,9 @@
 {
 	"title": "Arch HUD",
-	"type": "ServerContent",
+	"type": "hud",
 	"tags": 
 	[
-		"roleplay",
-		"realism"
+		"client",
+		"minimap"
 	]
 }
